@@ -25,6 +25,7 @@ The `msigd` command line tools allows you to change all settings for MSI monitor
 - [7. Examples](#7-examples)
     - [7.1. Automatically switch input source](#71-automatically-switch-input-source)
     - [7.2. Change settings depending on foreground window](#72-change-settings-depending-on-foreground-window)
+    - [7.3. Using msigd in a libvirt-qemu hook](#73-using-msigd-in-a-libvirt-qemu-hook)
 - [8. TODO](#8-todo)
 - [9. Credits](#9-credits)
 
@@ -60,40 +61,37 @@ information by opening an issue.
 
 | ID            | Firmware | Supported     | Version | Special | Panel |
 |:------------- |:-------- |:-------------:|:----- |:---- |:-------------- |
-| MPG27CQ       | ?        | ?             | ?     |   ?  | ?              |
-| MAG270CR      | ?        | ?             | ?     |   ?  | ?              |
-| MAG271R       | ?        | ?             | ?     |   ?  | ?              |
-| MAG271CQP     | ?        | ?             | "V19" | "006"| ?              | 
-| MAG271CQR     | ?        | Yes           | "V19" | "006"| TPM270WQ1_DP01 |
-| MAG271QR      | ?        | ?             | ?     |   ?  | ?              |
-| MAG271V       | ?        | ?             | ?     |   ?  | ?              |
-| MAG272        | ?        | ?             | "V18" | "00O"| ?              |
-| MAG272C       | ?        | ?             | "V18" | "00O"| ?              |
-| MAG272CR      | ?        | ?             | "V18" | "00O"| ?              |
-| MAG272R       | ?        | ?             | "V18" | "00O"| ?              |
-| MAG272QP      | ?        | Yes           | "V18" | "00O"| ?              |
-| MAG272QR      | ?        | ?             | "V18" | "00O"| ?              |
-| MAG272CR      | ?        | ?             | "V18" | "00O"| ?              |
-| MAG272CQR     | ?        | ?             | "V18" | "00O"| ?              |
-| MAG272CRX     | ?        | ?             | "V18" | "00O"| ?              |
-| MAG272QP      | ?        | ?             | "V18" | "00O"| ?              |
-| MAG272QR      | ?        | ?             | "V18" | "00O"| ?              |
+| MPG27CQ       | ?        | Yes           | "V18" | "001"| ?              |
+| MPG341CQR     | ?        | ?             | ?     |   ?  | ?              |
+| MPG341CQRV    | ?        | ?             | ?     |   ?  | ?              |
 | MAG241C       | ?        | Yes           | "V18" | "002"| ?              |
-| MAG241CR      | ?        | Yes           | "V18" | "002"| ?              |
 | MAG241CP      | ?        | Yes           | "V18" | "002"| ?              |
+| MAG241CR      | ?        | Yes           | "V18" | "002"| ?              |
 | MAG241CV      | ?        | Yes           | "V18" | "002"| ?              |
+| MAG251RX      | ?        | ?             | ?     |   ?  | ?              |
+| MAG270CR      | ?        | ?             | ?     |   ?  | ?              |
 | MAG271C       | ?        | ?             | "V18" | "002"| ?              |
 | MAG271CR      | ?        | ?             | "V18" | "002"| ?              |
 | MAG271CP      | ?        | ?             | "V18" | "002"| ?              |
+| MAG271CQP     | ?        | ?             | "V19" | "006"| ?              | 
+| MAG271CQR     | ?        | Yes           | "V19" | "006"| TPM270WQ1_DP01 |
 | MAG271CV      | ?        | ?             | "V18" | "002"| ?              |
-| MAG322CR      | ?        | ?             | ?     |   ?  | ?              |
-| MAG321CQR     | ?        | ?             | ?     |   ?  | ?              |
-| MPG341CQR     | ?        | ?             | ?     |   ?  | ?              |
-| MAG322CQR     | ?        | ?             | ?     |   ?  | ?              |
-| MPG341CQRV    | ?        | ?             | ?     |   ?  | ?              |
-| MAG322CQRV    | ?        | ?             | ?     |   ?  | ?              |
+| MAG271QR      | ?        | ?             | ?     |   ?  | ?              |
+| MAG271R       | ?        | ?             | ?     |   ?  | ?              |
+| MAG271V       | ?        | ?             | ?     |   ?  | ?              |
+| MAG272        | ?        | Yes           | "V18" | "00L"| ?              |
+| MAG272C       | ?        | ?             | "V18" | "00O"| ?              |
+| MAG272CQR     | ?        | Yes           | "V18" | "00E"| ?              |
+| MAG272CR      | ?        | ?             | "V18" | "00O"| ?              |
+| MAG272CRX     | ?        | ?             | "V18" | "00O"| ?              |
+| MAG272QP      | ?        | Yes           | "V18" | "00O"| ?              |
+| MAG272QR      | ?        | ?             | "V18" | "00O"| ?              |
+| MAG272R       | ?        | ?             | "V18" | "00O"| ?              |
+| MAG321CQR     | ?        | Yes           | "V18" | "00:"| ?              |
 | MAG321CURV    | FW.009   | Yes           | "V18" | "00;"| SAM_LSM315FP01 |
-| MAG251RX      | ?        | ?             | ?     |   ?  | ?              |
+| MAG322CQR     | ?        | ?             | ?     |   ?  | ?              |
+| MAG322CQRV    | ?        | ?             | ?     |   ?  | ?              |
+| MAG322CR      | ?        | ?             | ?     |   ?  | ?              |
 | PS341WU       | FW.024   | Yes           | "V06" | "00?"| ?              |
 
 ### 2.2. Service menu
@@ -394,6 +392,45 @@ MAG272 Series:
       --navi_left            RW values: off brightness game_mode screen_assistance alarm_clock refresh_rate info 
       --navi_right           RW values: off brightness game_mode screen_assistance alarm_clock refresh_rate info 
 
+MAG272 Series:
+    These options apply to the MAG272 Series:
+
+      --mode                 RW values: user fps racing rts rpg mode5 mode6 mode7 mode8 mode9 user reader cinema designer HDR 
+      --unknown210            W values: 0 to 10
+      --unknown210            R values: 0 to 10
+      --free_sync            RW values: off on 
+      --zero_latency         RW values: off on 
+      --screen_size          RW values: auto 4:3 16:9 
+      --night_vision         RW values: off normal strong strongest ai 
+      --pro_mode             RW values: user reader cinema designer HDR 
+      --input                RW values: hdmi1 hdmi2 dp usbc 
+      --screen_info          RW values: off on 
+      --navi_up              RW values: off brightness game_mode screen_assistance alarm_clock refresh_rate info 
+      --navi_down            RW values: off brightness game_mode screen_assistance alarm_clock refresh_rate info 
+      --navi_left            RW values: off brightness game_mode screen_assistance alarm_clock refresh_rate info 
+      --navi_right           RW values: off brightness game_mode screen_assistance alarm_clock refresh_rate info 
+
+MPG27 Series:
+    These options apply to the MPG27 Series:
+
+      --black_tuner          RW values: 0 to 20
+      --free_sync            RW values: off on 
+      --zero_latency         RW values: off on 
+      --screen_size          RW values: 19 24 4:3 16:9 
+      --pro_mode             RW values: user reader cinema designer 
+      --input                RW values: hdmi1 hdmi2 dp 
+      --pip                  RW values: off pip pbp 
+      --pip_input            RW values: hdmi1 hdmi2 dp 
+      --pbp_input            RW values: hdmi1 hdmi2 dp 
+      --pip_size             RW values: small medium large 
+      --pip_position         RW values: left_top right_top left_bottom right_bottom 
+      --toggle_display        W values: on 
+      --toggle_sound          W values: on 
+      --navi_up              RW values: off brightness game_mode screen_assistance alarm_clock input pip refresh_rate 
+      --navi_down            RW values: off brightness game_mode screen_assistance alarm_clock input pip refresh_rate 
+      --navi_left            RW values: off brightness game_mode screen_assistance alarm_clock input pip refresh_rate 
+      --navi_right           RW values: off brightness game_mode screen_assistance alarm_clock input pip refresh_rate 
+
 PS Series:
     These options apply to the PS Series:
 
@@ -571,6 +608,13 @@ while true; do
 done
 ```
 
+### 7.3. Using msigd in a libvirt-qemu hook
+
+[mike-vivas](https://github.com/mike-vivas) contributed an example of using
+msigd within a [libvirt-qemu](contrib/qemu) hook to automatically switch the monitor to
+virtual guests booting up.
+
+
 ## 8. TODO
 
 - Code cleanup
@@ -584,5 +628,12 @@ done
 
 [Maxime](https://github.com/intello21) - MAG241C support
 
-[mike-vivas](https://github.com/mike-vivas) - Arch linux support
+[mike-vivas](https://github.com/mike-vivas) - Arch linux support, `contrib`
 
+[gbirchley](https://github.com/gbirchley) - MAG272 support
+
+[Térence Clastres](https://github.com/terencode) - MPG27CQ support and steel series LED support
+
+[elric1789](https://github.com/elric1789) - MAG272QP support
+
+[andaag](https://github.com/andaag) - MAG272CQR support

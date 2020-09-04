@@ -1,26 +1,29 @@
 
-#include <cstddef>
-#include <string>
-#include <array>
-#include <vector>
-#include <map>
-#include <type_traits>
-#include <chrono>
-#include <thread>
-
-#include <stdio.h>
-#include <string.h>
-
-#ifndef USE_HID
+#if !defined(USE_HID)
 #define USE_HID 	(1)
 #endif
-
 
 #if USE_HID
 #include "phid.h"
 #else
 #include "pusb.h"
 #endif
+
+#include "psteelseries.h"
+
+#include <cstddef>
+#include <string>
+#include <array>
+#include <vector>
+#include <unordered_map>
+#include <map>
+#include <utility>
+#include <type_traits>
+#include <chrono>
+#include <thread>
+
+#include <stdio.h>
+#include <string.h>
 
 static const char *appname = "msigd";
 static const char *appversion = "0.9";
@@ -41,13 +44,21 @@ enum series_t
 {
 	UNKNOWN = 0x0000,
 	MAG32   = 0x0001,
-	MAG241  = 0x0002,
-	MAG271  = 0x0004,
-	MAG272  = 0x0008,
-	PS      = 0x0010,
+	MAG321  = 0x0002,
+	MAG241  = 0x0004,
+	MAG271  = 0x0008,
+	MAG272  = 0x0010,
+	PS      = 0x0020,
 
-	MAG     = MAG32 | MAG272 | MAG271 | MAG241,
+	MAG     = MAG32 | MAG321 | MAG272 | MAG271 | MAG241,
 	ALL     = MAG | PS,
+};
+
+enum led_type_t
+{
+	LT_NONE,
+	LT_MYSTIC,
+	LT_STEEL
 };
 
 static series_t operator | (series_t a, series_t b)
@@ -70,17 +81,21 @@ struct identity_t
 	std::string p140;
 	std::string p150;
 	std::string name;
-	bool        has_mystic;
+	led_type_t  leds;
 };
 
 static std::vector<identity_t> known_models =
 {
-	{ UNKNOWN, "", "", "Unknown", false },
-	{ MAG32, "00;", "V18", "MAG32 Series", true },
-	{ MAG241, "002", "V18", "MAG241 Series", true },
-	{ MAG271, "006", "V19", "MAG271 Series", true },
-	{ MAG272, "00O", "V18", "MAG272 Series", true },
-	{ PS,  "00?", "V06", "PS Series", false }
+	{ UNKNOWN, "", "", "Unknown", LT_NONE },
+	{ MAG321, "00:", "V18", "MAG321CQR", LT_MYSTIC }, // doesn't have USBC
+	{ MAG32,  "00;", "V18", "MAG32 Series", LT_MYSTIC },
+	{ MAG241, "002", "V18", "MAG241 Series", LT_MYSTIC },
+	{ MAG271, "006", "V19", "MAG271 Series", LT_MYSTIC },
+	{ MAG272, "00O", "V18", "MAG272 Series", LT_MYSTIC }, // MAG272QP
+	{ MAG272, "00L", "V18", "MAG272 Series", LT_MYSTIC }, // MAG272
+	{ MAG272, "00E", "V18", "MAG272 Series", LT_MYSTIC }, // MAG272CQR
+	{ MAG271, "001", "V18", "MPG27 Series", LT_STEEL },   // MPG27CQ
+	{ PS,  "00?", "V06", "PS Series", LT_NONE }
 };
 
 enum encoding_t
@@ -445,6 +460,7 @@ struct alarm4x_t : public setting_t
 	}
 };
 
+// MPG27CQ:    FA3
 // MPG341CQR:  3DA0
 // MAG321CURV  3DA2
 // MAG322CQRV  3DA4
@@ -455,7 +471,7 @@ static std::vector<setting_t *> settings(
 	new setting_t(ALL, WRITE,              "00100", "power", {"off", "-on"}),
 	new setting_t(ALL, READ,               "00110", "macro_key", {"off", "pressed"}),  // returns 000 called frequently by OSD app, readonly
 	new setting_t(MAG272,                  "00120", "mode", {"user", "fps", "racing", "rts", "rpg", "mode5", "mode6", "mode7", "mode8", "mode9", "user", "reader", "cinema", "designer", "HDR"}),
-	new setting_t(MAG32,                   "00120", "mode", {"user", "fps", "racing", "rts", "rpg", "mode5", "mode6", "mode7", "mode8", "mode9", "user", "reader", "cinema", "designer"}),
+	new setting_t(MAG32 | MAG321,          "00120", "mode", {"user", "fps", "racing", "rts", "rpg", "mode5", "mode6", "mode7", "mode8", "mode9", "user", "reader", "cinema", "designer"}),
 	new setting_t(PS,                      "00120", "mode", {"-m0","-m1","-m2","-m3","-m4""-m5","-m6","-m7","-m8","-m9",
 		"user", "adobe_rgb", "dci_p3", "srgb", "hdr", "cinema", "reader", "bw", "dicom", "eyecare", "cal1", "cal2", "cal3"}),
 	new setting_t(ALL,                     "00130", "serial"), // returns 13 blanks
@@ -489,16 +505,19 @@ static std::vector<setting_t *> settings(
 	new setting_t(UNKNOWN,                 "00271", "unknown271", 0, 100),  // returns 000, read only?
 	// FIXME: adaptive sync ? game-mode only
 	new setting_t(MAG32,                   "00280", "unknown280"),  // returns 000, read only, write fails and monitor needs off/on cycle
-	new setting_t(MAG272 | MAG271 | MAG241,"00280", "free_sync", {"off", "on"}),
-	new setting_t(MAG32 | MAG272 | MAG271, "00290", "zero_latency", {"off", "on"}),  // returns 001
+	new setting_t(MAG321 | MAG272 | MAG271 | MAG241,
+		                                   "00280", "free_sync", {"off", "on"}),
+	new setting_t(MAG32 | MAG321 | MAG272 | MAG271,
+		                                   "00290", "zero_latency", {"off", "on"}),  // returns 001
 	// FIXME: MAG241 manual says it is supported but constantly produces time out errors
 	// new setting_t(MAG241,                  "002:0", "screen_size", {"4:3", "16:9"}),
 	new setting_t(MAG272,                  "002:0", "screen_size", {"auto", "4:3", "16:9"}),
-	new setting_t(MAG32 | MAG271,          "002:0", "screen_size", {"19", "24", "4:3", "16:9"}),
+	new setting_t(MAG32 | MAG321 | MAG271, "002:0", "screen_size", {"19", "24", "4:3", "16:9"}),
 	new setting_t(PS,                      "002:0", "screen_size", {"auto", "4:3", "16:9", "21:9", "1:1"}),
 	new setting_t(MAG32 | MAG272,          "002;0", "night_vision", {"off", "normal", "strong", "strongest", "ai"}),
 	new setting_t(MAG272,                  "00300", "pro_mode", {"user", "reader", "cinema", "designer", "HDR"}),
-	new setting_t(MAG32 | MAG271 | MAG241, "00300", "pro_mode", {"user", "reader", "cinema", "designer"}),
+	new setting_t(MAG32 | MAG321 |MAG271 | MAG241,
+		                                   "00300", "pro_mode", {"user", "reader", "cinema", "designer"}),
 	new setting_t(PS,                      "00300", "pro_mode", {"user", "adobe_rgb", "dci_p3", "srgb", "hdr", "cinema", "reader", "bw", "dicom", "eyecare", "cal1", "cal2", "cal3"}),
 	new setting_t(MAG | PS,                "00310", "eye_saver", {"off", "on"}),  // returns 000
 	new setting_t(UNKNOWN,                 "00320", "unknown320", 0, 100),
@@ -529,18 +548,22 @@ static std::vector<setting_t *> settings(
 	new tripple_t(PS,                      "004;1", "saturation_cmy"),
 	new setting_t(PS,                      "004:0", "gamma", {"1.8", "2", "2.2", "2.4", "2.6"}),
 	new setting_t(MAG32 | MAG272 | PS,     "00500", "input",  {"hdmi1", "hdmi2", "dp", "usbc"}),  // returns 002  -> 0=hdmi1, 1=hdmi2, 2=dp, 3=usbc
-	new setting_t(        MAG271 | MAG241, "00500", "input",  {"hdmi1", "hdmi2", "dp"}),
-	new setting_t(MAG32 | MAG271,          "00600", "pip", {"off", "pip", "pbp"}),  // returns 000 0:off, 1:pip, 2:pbp
+	new setting_t(MAG321| MAG271 | MAG241, "00500", "input",  {"hdmi1", "hdmi2", "dp"}),
+	new setting_t(MAG32 | MAG321 | MAG271, "00600", "pip", {"off", "pip", "pbp"}),  // returns 000 0:off, 1:pip, 2:pbp
 	new setting_t(PS,                      "00600", "pip", {"off", "pip", "pbp_x2", "pbp_x3", "pbp_x4"}),  // returns 000 0:off, 1:pip, 2:pbp
 	new setting_t(MAG32,                   "00610", "pip_input", {"hdmi1", "hdmi2", "dp", "usbc"}),
 	new setting_t(MAG32,                   "00620", "pbp_input", {"hdmi1", "hdmi2", "dp", "usbc"}),
-	new setting_t(MAG271,                  "00610", "pip_input", {"hdmi1", "hdmi2", "dp"}),
-	new setting_t(MAG271,                  "00620", "pbp_input", {"hdmi1", "hdmi2", "dp"}),
+	new setting_t(MAG271 | MAG321,         "00610", "pip_input", {"hdmi1", "hdmi2", "dp"}),
+	new setting_t(MAG271 | MAG321,         "00620", "pbp_input", {"hdmi1", "hdmi2", "dp"}),
 	new setting_t(PS,                      "00620", "pip_input", {"hdmi1", "hdmi2", "dp", "usbc"}),
-	new setting_t(PS | MAG32 | MAG271,     "00630", "pip_size", {"small", "medium", "large"}),
-	new setting_t(PS | MAG32 | MAG271,     "00640", "pip_position", {"left_top", "right_top", "left_bottom", "right_bottom"}),
-	new setting_t(PS | MAG32 | MAG271, WRITE, "00650", "toggle_display", {"-off", "on"}),  // returns 56006
-	new setting_t(MAG32 | MAG271, WRITE,   "00660", "toggle_sound", {"-off", "on"}),  // returns 56006, but used to toggle audio in app, no response packet - only works with "1"
+	new setting_t(PS | MAG32 | MAG321 | MAG271,
+		                                   "00630", "pip_size", {"small", "medium", "large"}),
+	new setting_t(PS | MAG32 | MAG321 | MAG271,
+		                                   "00640", "pip_position", {"left_top", "right_top", "left_bottom", "right_bottom"}),
+	new setting_t(PS | MAG32 | MAG321 | MAG271, WRITE,
+		                                   "00650", "toggle_display", {"-off", "on"}),  // returns 56006
+	new setting_t(MAG32 | MAG321 | MAG271, WRITE,
+		                                   "00660", "toggle_sound", {"-off", "on"}),  // returns 56006, but used to toggle audio in app, no response packet - only works with "1"
 	new setting_t(PS,                      "00660", "pip_sound_source", {"hdmi1", "hdmi2", "dp", "usbc"}),  // returns 56006, but used to toggle audio in app, no response packet - only works with "1"
 	new setting_t(PS,                      "00670", "pbp_input1", {"hdmi1", "hdmi2", "dp", "usbc"}),
 	new setting_t(PS,                      "00680", "pbp_input2", {"hdmi1", "hdmi2", "dp", "usbc"}),
@@ -551,7 +574,7 @@ static std::vector<setting_t *> settings(
 	new setting_t(PS,                      "00800", "osd_language", 0, 28, -100),  // returns 001 -> value = '0' + language, 0 chinese, 1 English, 2 French, 3 German, ... maximum value "C"
 	new setting_t(ALL,                     "00810", "osd_transparency", 0, 5),  // returns 000
 	new setting_t(ALL,                     "00820", "osd_timeout",0, 30),  // returns 020
-	new setting_t(PS | MAG272,             "00830", "screen_info", {"off", "on"}),
+	new setting_t(PS,                      "00830", "screen_info", {"off", "on"}),
 	new setting_t(ALL, WRITE,              "00840", "reset", {"-off", "on"}),  // returns 56006 - reset monitors
 	new setting_t(MAG,                     "00850", "sound_enable", {"off", "on"}),  // returns 001 - digital/anlog as on some screenshots?
 	new setting_t(PS,                      "00850", "audio_source", {"analog", "digital"}),  // returns 001 - digital/anlog as on some screenshots?
@@ -578,10 +601,10 @@ static std::vector<setting_t *> settings(
 	new setting_t(MAG241,                  "00920", "navi_left", {"off", "brightness", "game_mode", "screen_assistance", "alarm_clock", "input", "refresh_rate"}),
 	new setting_t(MAG241,                  "00930", "navi_right", {"off", "brightness", "game_mode", "screen_assistance", "alarm_clock", "input", "refresh_rate"}),
 
-	new setting_t(MAG32 | MAG271,          "00900", "navi_up", {"off", "brightness", "game_mode", "screen_assistance", "alarm_clock", "input", "pip", "refresh_rate"}),
-	new setting_t(MAG32 | MAG271,          "00910", "navi_down", {"off", "brightness", "game_mode", "screen_assistance", "alarm_clock", "input", "pip", "refresh_rate"}),
-	new setting_t(MAG32 | MAG271,          "00920", "navi_left", {"off", "brightness", "game_mode", "screen_assistance", "alarm_clock", "input", "pip", "refresh_rate"}),
-	new setting_t(MAG32 | MAG271,          "00930", "navi_right", {"off", "brightness", "game_mode", "screen_assistance", "alarm_clock", "input", "pip", "refresh_rate"}),
+	new setting_t(MAG32 | MAG321 | MAG271, "00900", "navi_up", {"off", "brightness", "game_mode", "screen_assistance", "alarm_clock", "input", "pip", "refresh_rate"}),
+	new setting_t(MAG32 | MAG321 | MAG271, "00910", "navi_down", {"off", "brightness", "game_mode", "screen_assistance", "alarm_clock", "input", "pip", "refresh_rate"}),
+	new setting_t(MAG32 | MAG321 | MAG271, "00920", "navi_left", {"off", "brightness", "game_mode", "screen_assistance", "alarm_clock", "input", "pip", "refresh_rate"}),
+	new setting_t(MAG32 | MAG321 | MAG271, "00930", "navi_right", {"off", "brightness", "game_mode", "screen_assistance", "alarm_clock", "input", "pip", "refresh_rate"}),
 
 	new setting_t(PS,                      "00900", "navi_up", {"off", "brightness", "pro_mode", "screen_assistance", "alarm_clock", "input", "pip", "zoom_in", "info"}),
 	new setting_t(PS,                      "00910", "navi_down", {"off", "brightness", "pro_mode", "screen_assistance", "alarm_clock", "input", "pip", "zoom_in", "info"}),
@@ -823,13 +846,6 @@ private:
 				ret += '_';
 		}
 		return ret;
-#if 0
-		std::string ret(buf+1);
-		if (ret.size() > 0 && ret[ret.size()-1] == '\r')
-			return ret.substr(0,ret.size()-1);
-		else
-			return ret;
-#endif
 	}
 
 };
@@ -941,17 +957,305 @@ static int error(error_e err, const char *fmt, Args&&... args)
 	return err;
 }
 
+static int test_steel_device(steeldev_t &steeldev, std_logger_t &logger)
+{
+	logger(DEBUG, "Testing group color");
+	static const auto cSTEEL_DELAY = std::chrono::milliseconds(1000);
+	steeldev.global_illumination(0xff);
+	steeldev.flush();
+	steeldev.write_all_leds(0xff, 0xff, 0xff);
+	steeldev.flush();
+	std::this_thread::sleep_for(cSTEEL_DELAY);
+	steeldev.write_all_leds(0xff, 0x00, 0x00);
+	steeldev.flush();
+	std::this_thread::sleep_for(cSTEEL_DELAY);
+	steeldev.write_all_leds(0x00, 0xff, 0x00);
+	steeldev.flush();
+	std::this_thread::sleep_for(cSTEEL_DELAY);
+	steeldev.write_all_leds(0x00, 0x00, 0xff);
+	steeldev.flush();
+	logger(DEBUG, "Testing single color");
+	for (uint8_t i = 0; i<0x28; i++)
+	{
+		std::this_thread::sleep_for(cSTEEL_DELAY / 10);
+		steeldev.write_led(i, 0xff, 0xff, 0x00);
+		steeldev.flush();
+	}
+	logger(DEBUG, "Testing global illumination 0 to 255, step 8");
+	for (uint16_t i = 0; i<0xff; i+=0x08)
+	{
+		std::this_thread::sleep_for(cSTEEL_DELAY / 10);
+		steeldev.global_illumination(i);
+		steeldev.flush();
+	}
+	logger(DEBUG, "Enabling colorshift for five seconds");
+	steeldev.colorshift_all_leds(0x01);
+	steeldev.flush();
+	std::this_thread::sleep_for(cSTEEL_DELAY * 5);
+	logger(DEBUG, "Sending b record ... Waiting 5 seconds");
+	steel_data_0b data_0b(0, true);
+	steeldev.write_0b(data_0b);
+	steeldev.flush();
+	std::this_thread::sleep_for(cSTEEL_DELAY * 5);
+	logger(DEBUG, "Disabling colorshift for two seconds");
+	steeldev.colorshift_all_leds(0x00);
+	steeldev.flush();
+	std::this_thread::sleep_for(cSTEEL_DELAY * 2);
+	return E_OK;
+}
+
+static int arg_to_u(unsigned &v, const std::string &s, const std::string &name, unsigned max)
+{
+	std::size_t idx(std::string::npos);
+	try
+	{
+		v = std::stoul(s, &idx, 10);
+	}
+	catch (...)
+	{
+	}
+	if (s.size() != idx)
+		return error(E_SYNTAX, "Error decoding %s: %s", name, s);
+	if (v > max)
+		return error(E_SYNTAX, "Error %s max value is %d: %s", name, max, s);
+	return E_OK;
+}
+
+static std::unordered_map<std::string, std::pair<unsigned, unsigned>>
+steel_groups =
+{
+	{ "G1", {0x00,0x07} },
+	{ "G2", {0x08,0x0f} },
+	{ "G3", {0x10,0x17} },
+	{ "G4", {0x18,0x1f} },
+	{ "G5", {0x20,0x27} },
+	{ "G6", {0x28,0x3e} },
+	{ "G7", {0x3f,0x66} },
+};
+
+static int steel_main(std_logger_t &logger, int argc, char **argv)
+{
+	logger.set_level(DEBUG, true);
+	//steeldev_t steeldev(logger, 0x1462, 0x3fa4, "MSI Gaming Controller");
+	steeldev_t steeldev(logger, 0x1038, 0x1126, "SteelSeries MLC");
+	//part of the code may as well work on keyboards with per key led.
+	// Examples are GE63, GE73 with usb ids 1038:1122
+
+	if (!steeldev)
+		return error(E_IDENTIFY, "No steel series usb device found", 0);
+
+	int argp = 0;
+	int ret = 0;
+	unsigned profile = 0;
+	std::array<steel_data_0b, 16> profile_data;
+	std::array<std::vector<unsigned>, 16> profile_cols;
+	std::array<std::vector<unsigned>, 16> profile_dur;
+	std::array<int, 16> profile_speed;
+
+	// First entry has profile id.
+	for (std::size_t i = 0; i < profile_data.size(); i++)
+	{
+		profile_data[i].col[0].e[0] = i;
+		profile_speed[i] = 5;
+	}
+
+	while (argp < argc)
+	{
+		std::string cur_opt(argv[argp]);
+
+		if (cur_opt == "--test")
+		{
+			if ((ret = test_steel_device(steeldev, logger)) > 0)
+				return ret;
+		}
+		else if (cur_opt == "--persist")
+		{
+			steeldev.persist();
+		}
+		else if (cur_opt == "--flush")
+		{
+			steeldev.flush();
+		}
+		else if (cur_opt == "--color" && argp + 1 < argc)
+		{
+			int ret(0);
+			unsigned start(0);
+			unsigned end(0);
+
+			auto p = splitstr(argv[++argp], ':');
+			if (p.size() != 2)
+				return error(E_SYNTAX, "Error decoding range and color: %s", argv[argp]);
+			printf("%s\n", p[0].c_str());
+			auto git = steel_groups.find(p[0].c_str());
+			if (git != steel_groups.end())
+			{
+				start = git->second.first;
+				end = git->second.second;
+			}
+			else
+			{
+				auto r = splitstr(p[0], '-');
+				if (r.size() > 2)
+					return error(E_SYNTAX, "Error decoding range and color: %s", argv[argp]);
+
+				if (arg_to_u(start, r[0], "range start", 40*2+23-1) != 0
+					|| arg_to_u(end, r[r.size() == 2 ? 1 : 0], "range end", 40*2+23-1) != 0 || start > end)
+					return error(E_SYNTAX, "max led num is %d - parameter error: %s", 40*2 + 23 - 1, argv[argp]);
+			}
+			std::size_t idx(0);
+			if (!p[1].empty() && p[1][0] == 'P')
+			{
+				unsigned v(0);
+				if (arg_to_u(v, p[1].substr(1), "led profile", 15) !=0 )
+					return error(E_SYNTAX, "Error decoding color: %s", argv[argp]);
+				auto i=start;
+				for (; i+40 <= end; i+=40)
+				{
+					logger(DEBUG, "setting profile %d-%d:P%d", i, 40, v);
+					steeldev.write_led_profile(i, i + 40 - 1, v);
+				}
+				if (i <= end)
+				{
+					logger(DEBUG, "setting profile %d-%d:P%d", i, 40, v);
+					steeldev.write_led_profile(i, end, v);
+				}
+			}
+			else
+			{
+				auto col = std::stoul(p[1], &idx, 16);
+				if (idx != p[1].size())
+					return error(E_SYNTAX, "Error decoding color: %s", argv[argp]);
+
+				auto i=start;
+				for (; i+40 <= end; i+=40)
+				{
+					logger(DEBUG, "setting color %d-%d:%06x", i, 40, col);
+					steeldev.write_led_range(i, i + 40 - 1, (col >> 16) & 0xff, (col >> 8) & 0xff, col & 0xff);
+				}
+				if (i <= end)
+				{
+					logger(DEBUG, "setting color %d-%d:%06x", i, end - i + 1, col);
+					steeldev.write_led_range(i, end, (col >> 16) & 0xff, (col >> 8) & 0xff, col & 0xff);
+				}
+			}
+		}
+		else if (cur_opt == "--illum" && argp + 1 < argc)
+		{
+			unsigned i = 0;
+			int ret = 0;
+			if ((ret = arg_to_u(i, argv[++argp], "illum", 255))>0)
+				return ret;
+			steeldev.global_illumination(i);
+		}
+		else if (cur_opt == "--delay" && argp + 1 < argc)
+		{
+			unsigned i = 0;
+			int ret = 0;
+			if ((ret = arg_to_u(i, argv[++argp], "delay", 10000))>0)
+				return ret;
+			std::this_thread::sleep_for(std::chrono::milliseconds(i));
+		}
+		else if (cur_opt == "--profile" && argp + 1 < argc)
+		{
+			int ret = 0;
+			if ((ret = arg_to_u(profile, argv[++argp], "profile", 16))>0)
+				return ret;
+			logger(DEBUG, "setting current profile to %d", profile);
+		}
+		else if (cur_opt == "--wave_speed" && argp + 1 < argc)
+		{
+			int ret = 0;
+			unsigned val = 0;
+			if ((ret = arg_to_u(val, argv[++argp], "wave_speed", 100))>0)
+				return ret;
+			logger(DEBUG, "setting wave speed for profile %d to %d", profile, val);
+			profile_data[profile].set_wave_speed(val);
+			steeldev.write_0b(profile_data[profile]);
+		}
+		else if (cur_opt == "--wave_mode" && argp + 1 < argc)
+		{
+			int ret = 0;
+			unsigned val = 0;
+			if ((ret = arg_to_u(val, argv[++argp], "wave_mode", 5))>0)
+				return ret;
+			logger(DEBUG, "setting wave mode for profile %d to %d (status %s)", profile, val, val ? "enabled" : "disabled");
+			profile_data[profile].set_wave_mode(val);
+			steeldev.write_0b(profile_data[profile]);
+		}
+		else if (cur_opt == "--pcolors" && argp + 1 < argc)
+		{
+			auto &cols = profile_cols[profile];
+			auto &dur = profile_dur[profile];
+			cols.clear();
+			dur.clear();
+			auto entries = splitstr(argv[++argp], ',');
+
+			for (auto &e : entries)
+			{
+				try
+				{
+					auto sp = splitstr(e, ':');
+					if (sp.size() != 2)
+						return error(E_SYNTAX, "Error decoding profile color <%s> from: %s", e, argv[argp]);
+					std::size_t idx(0);
+					auto d = std::stoul(sp[0], &idx, 10);
+					if (idx != sp[0].size() || d > 10000)
+						return error(E_SYNTAX, "Error decoding profile color <%s> from: %s", e, argv[argp]);
+					auto col = std::stoul(sp[1], &idx, 16);
+					if (idx != sp[1].size())
+						return error(E_SYNTAX, "Error decoding profile color <%s> from: %s", e, argv[argp]);
+					cols.push_back(col);
+					dur.push_back(d);
+				}
+				catch (...)
+				{
+					return error(E_SYNTAX, "Error decoding profile color <%s> from: %s", e, argv[argp]);
+				}
+			}
+			if (cols.size() > 16)
+				return error(E_SYNTAX, "Error: too many profile colors (max 16): %s", argv[argp]);
+			logger(DEBUG, "setting %d colors for profile %d", cols.size(), profile);
+			profile_data[profile].set_colors(cols, dur, profile_speed[profile]);
+			steeldev.write_0b(profile_data[profile]);
+		}
+		else if (cur_opt == "--pspeed" && argp + 1 < argc)
+		{
+			int ret = 0;
+			unsigned val = 0;
+			if ((ret = arg_to_u(val, argv[++argp], "pspeed", 30))>0)
+				return ret;
+			if (val < 1)
+				return error(E_SYNTAX, "Error: pspeed (min 1): %s", argv[argp]);
+			auto &cols = profile_cols[profile];
+
+			logger(DEBUG, "setting speed %d %d", val, profile);
+			profile_data[profile].set_colors(cols, profile_dur[profile], val);
+			steeldev.write_0b(profile_data[profile]);
+			profile_speed[profile] = val;
+		}
+		else
+		{
+			return error(E_SYNTAX, "Unknown option: %s", cur_opt);
+		}
+		argp++;
+	}
+	return E_OK;
+}
+
 int main (int argc, char **argv)
 {
 	int arg_pointer = 1;
 	bool query = false;
 	bool debug = false;
 	bool info = false;
+	bool steel = false;
 	led_data leds;
 	bool mystic = false;
 	bool numeric = false;
 	string_list filters;
 	std::string waitfor;
+
+	std_logger_t logger;
 
 	std::vector<std::pair<std::string, std::string>> setopts;
 	std::vector<setting_t *> qsettings;
@@ -972,6 +1276,13 @@ int main (int argc, char **argv)
 			query = true;
 		else if (cur_opt == "--numeric" || cur_opt == "-n")
 			numeric = true;
+		else if (cur_opt == "--steel")
+		{
+			// anything behind the --steel parameter is interpreted as steel commands
+			steel = true;
+			++arg_pointer;
+			break;
+		}
 		else if ((cur_opt == "--filter" || cur_opt == "-f") && arg_pointer + 1 < argc)
 		{
 			filters = splitstr(argv[++arg_pointer], ',');
@@ -1000,7 +1311,14 @@ int main (int argc, char **argv)
 		arg_pointer++;
 	}
 
-	std_logger_t logger;
+	if (steel)
+	{
+		int ret = 0;
+		if ((ret = steel_main(logger, argc - arg_pointer, argv + arg_pointer)) > 0)
+			return ret;
+	}
+
+
 	logger.set_level(DEBUG, debug);
 
 	mondev_t usb(logger, 0x1462, 0x3fa4, "MSI Gaming Controller");
@@ -1064,7 +1382,7 @@ int main (int argc, char **argv)
 			}
 		}
 
-		if (mystic && !series.has_mystic)
+		if (mystic && !(series.leds == led_type_t::LT_MYSTIC))
 			return error(E_SYNTAX, "--mystic only supported on MAG series monitors");
 
 		// Check parameters to be set
